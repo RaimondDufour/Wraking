@@ -1,0 +1,260 @@
+---
+title: "Wraking H5"
+author: "Raimond Dufour"
+date: "16-1-2022"
+output:
+  word_document: default
+  html_document: default
+---
+```{r setup, echo = FALSE, include=FALSE, tidy=TRUE}
+knitr::opts_chunk$set(
+  error=FALSE, 
+  echo = FALSE, 
+  fig.align = 'center', 
+  out.width = '90%', 
+  warning = FALSE, 
+  message= FALSE, 
+  size = 'tiny', 
+  comment = ""
+)
+library(dplyr)
+library(tm)
+library(stringr)
+library(ggplot2)
+library(caret)
+library(tidytext)
+library(tidymodels)
+library(doSNOW)
+library(beepr)
+library(randomForest)
+library(quanteda)
+library(quanteda.textstats)
+library(magrittr)
+
+rm(list = ls())
+substrRight <- function(x, n){
+  substr(x, nchar(x)-n+1, nchar(x))
+}
+regexTellen <- function(datakolom, regex){
+  return (ifelse(grepl(regex, datakolom, ignore.case = TRUE) == F, 0, lengths(gregexpr(regex, datakolom, ignore.case = TRUE))) )
+}
+VarToevoegen <- function(Dataset, Woordenlijst, TeGebruikenTekst) {
+    for(i in 1:nrow(Woordenlijst)) {
+    Kolomnaam <- Woordenlijst[[i,1]]
+    print(Kolomnaam)
+    Dataset[[Kolomnaam]] <- regexTellen(Dataset$uitspraak, Woordenlijst[[i, 1]])
+    }
+    names(Dataset) <- make.names(names(Dataset))
+    return(Dataset)
+}
+```
+
+## 5. Bevindingen
+
+In een draaitabel kunnen de uitkomsten als volgt worden weergegeven (maar let wel: hier zitten dubbeltellingen in omdat een uitspraak meerdere redenen kan hebben): 
+
+```{r echo = FALSE}
+Dataset <- readRDS(file = "D:\\Uitwisselmap\\Projecten\\Ecli\\Rstudio\\Wraking\\Wrakingszaken.rds") %>% 
+  select(ecli, uitkomst, reden) %>% 
+  filter(uitkomst != 'geen wrakingsbeslissing') %>% 
+  mutate(uitkomst = as.character(uitkomst)) %>%  
+  mutate(uitkomst = ifelse(uitkomst == 'hybride', 'niet-ontvankelijk', uitkomst)) %>% 
+  mutate(uitkomst = as.factor(uitkomst)) 
+
+# count(Dataset, reden, sort  = TRUE)
+
+Dataset2 <- Dataset %>% 
+  mutate(hoedanigheid = ifelse(grepl("hoedanigheid", reden)==TRUE, 1, 0)) %>% 
+  mutate(somHoedanigheid = sum(hoedanigheid)) %>% 
+  mutate(optreden = ifelse(grepl("optreden", reden)==TRUE, 1, 0)) %>% 
+  mutate(somOptreden = sum(optreden)) %>% 
+  mutate(beslissing = ifelse(grepl("beslissing", reden)==TRUE, 1, 0)) %>% 
+  mutate(sombeslissing = sum(beslissing)) #%>% 
+  # count(optreden)
+
+hoedanigheid <- Dataset2 %>% 
+  as_tibble() %>% 
+  filter(grepl("hoedanigheid", reden)) %>% 
+  count(uitkomst) %>% 
+  mutate("%hoedanigheid" = paste(100*round(n/sum(n), digits=4), "%")) %>% 
+  rename(hoedanigheid = n)
+
+optreden <- Dataset2 %>% 
+  as_tibble() %>% 
+  filter(grepl("optreden", reden)) %>% 
+  count(uitkomst) %>% 
+  mutate("%optreden" = paste(100*round(n/sum(n), digits=4), "%")) %>% 
+  rename(optreden = n)
+
+beslissing <- Dataset2 %>% 
+  as_tibble() %>% 
+  filter(grepl("beslissing", reden)) %>% 
+  count(uitkomst) %>% 
+  mutate("%beslissing" = paste(100*round(n/sum(n), digits=4), "%")) %>% 
+  rename(Beslissing = n)
+
+hoedanigheid %>%
+  left_join(optreden, by = "uitkomst") %>%
+  left_join(beslissing, by = "uitkomst")
+
+print("DIT IS NOG NIET AF: NOG VEEL UITSPRAKEN DIE NIET-ONTVANKELIJK ZIJN HEB IK NOG NIET OP HANDMATIG REDEN GECODEERD")
+
+```
+
+Wat het meest in het oog springt is dat de kans dat een wrakingsverzoek slaagt vanwege de hoedanigheid van een rechter aanzienlijk hoger is (ruim 3x) dan waar het wrakingsverzoek is gestoeld op een procedurele beslissing.  
+
+Er zijn echter meer bevindingen te doen. Alleen het ecli-nummer geeft al meer informatie over de uitspraak: de instantie en het uitspraakjaar. Die zijn dus eenvoudig af te zetten tegen de uitkomst en reden van de wrakingsprocedure. En naast het ecli-nummer, de uitspraaktekst en de inhoudsindicatie publiceert rechtspraak.nl nog meer meta-informatie, zoals rechtsgebied, relaties met andere eclis, publicatiedatum en de zittingsplaats. Maar er is nog veel meer te vinden. Want elke analyse biedt weer meer meta-informatie om toe te voegen aan de dataset waarmee de database verrijkt wordt en het onderzoek verbeterd. 
+
+Als we de instanties onderscheiden dan komt het volgende beeld naar voren:
+
+```{r, echo = FALSE}
+Dataset <- Dataset %>% 
+  mutate(instantie = ifelse(grepl(":NL:RB", ecli)==TRUE, "rechtbank", "")) %>% 
+  mutate(instantie = ifelse(grepl(":NL:GH", ecli)==TRUE, "gerechtshof", instantie)) %>% 
+  mutate(instantie = ifelse(grepl(":NL:CRVB", ecli)==TRUE, "CRVB/CBB", instantie)) %>% 
+  mutate(instantie = ifelse(grepl(":NL:CBB", ecli)==TRUE, "CRVB/CBB", instantie)) %>% 
+  mutate(instantie = ifelse(grepl(":NL:HR", ecli)==TRUE, "Hoge Raad", instantie)) %>% 
+  mutate(instantie = ifelse(grepl(":NL:RVS", ecli)==TRUE, "Raad van State", instantie)) %>% 
+  mutate(instantie = ifelse(grepl(":NL:O", ecli)==TRUE, "overig", instantie)) %>% 
+  mutate(instantie = as.factor(instantie))
+
+Dataset %>%
+  mutate(tel = 1) %>% 
+  group_by(instantie, uitkomst) %>% 
+  summarize(aantal=sum(tel)) %>% 
+  arrange(desc(aantal)) %>% 
+  pivot_wider(names_from = instantie, values_from = aantal, values_fill = 0)
+  
+```
+
+Per jaar kunnen de wrakingsuitspraken als volgt worden weergegeven:
+
+```{r, PerJaar, echo = FALSE}
+Dataset$jaar <- str_extract(Dataset$ecli, "20\\d{2}:") %>% 
+  substring(1,4) 
+Dataset$jaar <- as.factor(Dataset$jaar)
+
+# perJaar <- Dataset %>%
+#   mutate(tel = 1) %>% 
+#   group_by(jaar, uitkomst) #>% 
+#   summarize(aantal=sum(tel)) #%>% 
+#   arrange(desc(aantal)) %>% 
+#   pivot_wider(names_from = jaar, values_from = aantal, values_fill = 0)
+
+Dataset %>% 
+  within(uitkomst <- factor(uitkomst, levels = names(sort(table(uitkomst), decreasing = TRUE)))) %>% 
+  ggplot(aes(x=jaar, fill=uitkomst)) + 
+  geom_bar(stat="count", position="dodge") + 
+  xlab("") +
+  ylab("aantal") +
+  theme_minimal() +
+  scale_fill_brewer(palette="Set1")
+```
+
+De redenen van wraking bij rechtbanken en gerechtshoven:
+
+```{r, RedenenBijRbEnHoven echo=FALSE}
+RedenenAnalyse <- Dataset %>% 
+  left_join(Dataset2, by = "ecli") %>%
+  select(ecli, instantie, uitkomst.x, reden.x, jaar, hoedanigheid, optreden, beslissing) %>% 
+  filter(instantie == 'rechtbank' | instantie == 'gerechtshof') %>% 
+  mutate(EnkelvoudigeReden = "") 
+  
+RedenenAnalyse2 <- RedenenAnalyse %>% 
+  filter(hoedanigheid == 1) %>% 
+  mutate(EnkelvoudigeReden = "hoedanigheid") %>% 
+  rbind(filter(RedenenAnalyse, optreden ==1)) %>% 
+  mutate(EnkelvoudigeReden = ifelse(EnkelvoudigeReden == "", "optreden", EnkelvoudigeReden)) %>% 
+  rbind(filter(RedenenAnalyse, beslissing ==1)) %>% 
+  mutate(EnkelvoudigeReden = ifelse(EnkelvoudigeReden == "", "beslissing", EnkelvoudigeReden)) %>% 
+  rename("reden" = "EnkelvoudigeReden")
+
+RedenenAnalyse2 %>% 
+  within(reden <- factor(reden, levels = names(sort(table(reden), decreasing = TRUE)))) %>% 
+  ggplot(aes(x=uitkomst.x, fill=reden)) + 
+  geom_bar(stat="count", position="dodge") + 
+  xlab("") +
+  ylab("aantal") +
+  theme_minimal() +
+  scale_fill_brewer(palette="Set1")
+
+```
+
+Het is duidelijk dat een (procedurele) beslissing de meest voorkomende wrakingsgrond is. Maar deze is ook wel weinig kansrijk. Keer op keer overweegt de wrakingsrechter dat een door de rechter genomen beslissing niet een te honoreren grond is voor wraking, tenzij de beslissing zodanig onbegrijpelijk is dat hierdoor de (schijn van) rechterlijke onpartijdigheid in het geding raakt. 
+
+En per (hoofd)rechtsgebied zijn de uitkomsten als volgt: 
+
+```{r echo=FALSE}
+Rechtsgebieden <- readRDS(file = "D:\\Uitwisselmap\\Projecten\\Ecli\\Rstudio\\Wraking\\Wraking_Rechtsgebieden.rds") %>% 
+  mutate(rechtsgebied2 = ifelse(grepl("iviel", rechtsgebied)==TRUE, "civiel recht", "")) %>% 
+  mutate(rechtsgebied2 = ifelse(grepl("traf", rechtsgebied)==TRUE, "strafrecht", rechtsgebied2)) %>% 
+  mutate(rechtsgebied2 = ifelse(grepl("estuursr", rechtsgebied)==TRUE, "bestuursrecht", rechtsgebied2)) %>% 
+  mutate(rechtsgebied2 = as.factor(rechtsgebied2)) %>% 
+  left_join(RedenenAnalyse2, by="ecli")
+ # summary(Rechtsgebieden)
+ # View(Rechtsgebieden)
+
+Dataset <- Dataset %>% 
+  left_join(Rechtsgebieden) %>% 
+  mutate(rechtsgebied = as.factor(rechtsgebied)) %>% 
+  filter(!is.na(rechtsgebied)) %>% 
+  droplevels()
+
+Dataset %>% 
+  within(rechtsgebied <- factor(rechtsgebied2, levels = names(sort(table(rechtsgebied2), decreasing = FALSE)))) %>% 
+  ggplot(aes(x=reorder(rechtsgebied, rechtsgebied, ), fill = uitkomst)) +
+  geom_bar(stat='count') + 
+  coord_flip() + 
+  theme_minimal() +
+  xlab(label = "") +
+  ylab(label = "aantal") +
+  scale_fill_brewer(palette="Set1")
+
+print("DIT IS NOG NIET AF: NOG VEEL UITSPRAKEN DIE NIET-ONTVANKELIJK ZIJN HEB IK NOG NIET OP HANDMATIG REDEN GECODEERD")
+```
+
+We moeten oppassen met het verbinden van conclusies aan deze verhouding: deze is natuurlijk ook gerelateerd aan het aantal procedures dat jaarlijks vatbaar is voor wraking, per rechtsgebied. Omdat lang niet alle uitspraken gepubliceerd worden, maar ook omdat lang niet iedere (voornamelijk civiele) procedures resulteren in een uitspraak, is deze informatie niet heel relevant. Wel is interessant dat het aantal toewijzingen binnen het bestuursrecht relatief hoger is dan binnen de twee andere rechtsgebieden.
+
+## 6. Conclusie met betrekking tot de gehanteerd methoden
+Het gebruiken van natural language processing is een uitstekend middel voor analyse van rechterlijke uitspraken. Feit blijft dat een beginset altijd handmatig zal moeten worden gecodeerd om de computer te kunnen leren. Hoe meer handmatig wordt ingevoerd, hoe kleiner de foutmarge van het algoritme zal zijn, maar hier is wel een optimum te vinden. 
+
+Er zijn verschillende manieren om een dataset te prepareren: je kunt bijvoorbeeld steekwoorden (liever: tekenreeksen) tellen, alle woorden of sets van woorden analyseren, of juist focussen op de samenhang van woorden. Daarnaast zijn er verschillende wijzen waarop de computer het algoritme bouwt. In dit artikel hebben wij een lineair model en de random forest-methode aan het werk gezien. Het is van tevoren niet goed te voorspellen welke methode de beste prestaties geeft.
+
+Valkuilen zijn:
+
+* De dataset van rechtspraak.nl is niet representatief omdat slechts een klein deel van de uitspraken is gepubliceerd;
+* De selectie van uitspraken voor het uit te voeren onderzoek is niet correct en daarmee niet representatief voor het onderzoek;
+* De keuze voor variabelen is arbitrair;
+* De foutmarge van het ene algoritme werkt door naar het volgende algoritme;
+* In productie: (rechts)ontwikkelingen zorgen voor een afwijkend idioom. Dat betekent dat een algoritme van tijd tot tijd geactualiseerd moet worden. 
+
+Wij zijn begonnen met het zoeken naar uitspraken in de gehele database van rechtspraak.nl op basis van de tekenreeks “wraking”. Op basis van verschillende reguliere expressies heeft de computer berekend welke uitspraak een wrakingszaak betrof en welke niet. Vervolgens hebben wij de uitkomst bepaald aan de hand van de laatste 500 tekens van de uitspraak en met behulp van een random forest-algoritme. Vervolgens hebben wij gekeken naar de reden van de wraking aan de hand van verschillende algoritmen. Daarmee hebben wij de hoogste score van de in dit artikel weten te vinden. Met de kennis van algoritmen die wij in dit artikel hebben opgedaan, wordt het tijd om de beste algoritmen weer toe te passen op alle coderingen. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+TOT HIER
+
+Als de wrakingskamer inhoudelijk over de wraking heeft geoordeeld, dan vinden wij veelal informatie over de wrakingsredenen in de inhoudsindicatie. Maar als de wrakingskamer het wrakingsverzoek niet-ontvankelijk heeft verklaard, dan worden de wrakingsredenen meestal niet beschreven in de inhoudsindicatie. In dat geval vallen wij terug op de volledige tekst van de uitspraak. Als het algoritme dus zeker is van zijn zaak, dan kunnen we daarop vertrouwen. Maar als het algoritme niet zo zeker is, dan zullen we voor die gevallen een nieuw algoritme bouwen, gebaseerd op de integrale uitspraaktekst.
+
+
+De inhoudsindicatie is vaak een korte beschrijving van de zaak, gemiddeld `r ` woorden. Als wij per ecli elk woord van de inhoudsindicatie in een aparte kolom tellen, dan krijgen wij een *bag of words*. Elk nieuw woord in de volgende inhoudsindicatie voegt weer een kolom toe. Uiteindelijk krijg je dan een tabel met per rij de inhoudsindicatie en per kolom alle woorden die in alle inhoudsindicaties stonden. In de cel staat het aantal keer dat het woord in die inhoudsindicatie is gevonden. 
+
+Het is duidelijk dat een beetje "corpus" leidt tot een hele grote tabel, maar er zijn mogelijkheden om die omvang wat te beperken. Om te beginnen kunnen alle letters omgezet worden in kleine letters en stopwoorden zoals "de" en "van" uit de teksten worden gehaald. 
+
+De computer ziet natuurlijk geen onderscheid tussen vervoegingen van werkwoorden, meervouden van zelfstandig naamwoorden etcetera. Maar taalkundigen hebben een algoritme gebouwd waarmee van woorden de stam kan worden berekend, zodat alle vervoegingen daaruit gefilterd worden. De stam is dan vaak geen bestaand woord, maar je kunt vaak wel begrijpen wat het oorspronkelijke woord was. 
+
+Vervolgens gaan we de frequentie van de woorden omslaan over het aantal woorden in de betreffende tekst en het aantal documenten waarin dat woord voorkomt. Dan ontstaat een gewogen beeld van "woordzwaarte". De computer kan nu berekenen welke woorden meer en minder met elkaar te maken hebben en hoe die zich verhouden tot de redenen die wij zoeken. Die verbanden kunnen worden uitgedrukt in een nieuwe matrix, waarbij de combinatie van woorden een getal vertegenwoordigt. Dit is voor mensen niet te bevatten, maar de computer kan prima uit de voeten met deze "semantische ruimte". 
+

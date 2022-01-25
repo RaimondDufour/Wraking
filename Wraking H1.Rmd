@@ -1,0 +1,104 @@
+---
+title: "Wrakingsprocedures"
+author: "Raimond Dufour"
+date: "12-1-2021"
+output:
+  word_document: default
+  html_document:
+    code_folding: show
+  pdf_document: default
+subtitle: Een iteratieve rechtspraakanalyse 
+editor_options:
+  markdown:
+    wrap: 72
+---
+```{r setup, include=FALSE, echo = FALSE, tidy=TRUE }
+knitr::opts_chunk$set(
+  error=TRUE, 
+  echo = FALSE, 
+  fig.align = 'center', 
+  out.width = '90%', 
+  warning = TRUE, 
+  message= TRUE, 
+  size = 'tiny', 
+  comment = ""
+)
+rm(list = ls())
+# def.chunk.hook  <- knitr::knit_hooks$get("chunk")
+# knitr::knit_hooks$set(chunk = function(x, options) {
+#   x <- def.chunk.hook(x, options)
+#   ifelse(options$size != "normalsize", paste0("\n \\", options$size,"\n\n", x, "\n\n \\normalsize"), x)
+# })
+
+```
+
+### 1. Inleiding
+
+Kwantitatieve analyse van uitspraken betreft het "tellen" van en binnen jurisprudentie. Het biedt een interessante mix tussen technologische en juridische onderwerpen. Met name de tekstuele analyse, ofwel het *natural language processing*, is de afgelopen jaren behoorlijk ontwikkeld, ook voor de Nederlandse taal, zodat de tech-savvy jurist zijn hart kan ophalen.
+
+Daar komt bij dat het aantal gepubliceerde (Nederlandse) uitspraken in de afgelopen jaren fors is gegroeid, en dan doel ik op de database van rechtspraak.nl . Helaas worden evenwel nog lang niet alle uitspraken gepubliceerd. Sommige schrijvers menen dat daarmee de representativiteit ontbreekt zodat elk kwantitatief onderzoek zinloos is, maar ik meen dat onderzoek wel degelijk zinvol kan zijn waar het gaat om hun onderlinge variabelen^[Zie ook: Pieter Wolters: *Mogelijkheden en beperkingen bij de kwantitatieve analyse van jurisprudentie voor de bestudering van geldend recht* in: Methoden van systematische rechtspraakanalyse, Boomjuridisch 2021].
+
+Om  de kloof tussen technici en juristen wat kleiner te maken zal ik hierna een onderzoek beschrijven dat ik heb uitgevoerd en ook de uitkomsten daarvan bespreken. Ik beoog hiermee bij te dragen aan de verbetering van de verschillende onderzoeksmethoden. Daarvoor is interactie tussen juristen en technici onmisbaar, dus ik sta zeer open voor kritiek en suggesties ter verbetering van de door mij beschreven methoden.
+
+#### Onderwerp van onderzoek: de wrakingsprocedure
+
+Dit artikel gaat over het onderzoek naar de wrakingsprocedure. Ik heb hiervoor gekozen omdat het [publicatieprotocol](https://www.rechtspraak.nl/Uitspraken/Paginas/Selectiecriteria.aspx)
+voorschrijft dat alle wrakingsbeslissingen worden gepubliceerd. De wrakingsprocedure is bovendien een eenvormige procedure zonder veel complicaties, betrekkelijk weinig rechtsontwikkeling en met veel subjectieve toetsen, terwijl de wettelijke kaders voor de drie rechtsgebieden bestuursrecht, strafrecht en civiel recht min of meer woordelijk gelijk zijn. Het aantal wrakingsuitspraken is bovendien voldoende voor analyse, terwijl het eveneens behapbaar is voor het bestek van dit onderzoek. Tot slot is de wrakingsprocedure een belangrijk onderdeel van de rechtspleging, zodat een analyse ervan kan bijdrage aan de praktijk van alledag.
+
+Het doel van dit onderzoek is tweeledig: ik probeer inzicht te geven in de praktijk van wrakingsprocedures en een onderzoeksmethode te presenteren die zou kunnen worden toegepast ter vervanging van of in aanvulling op de bestaande praktijk van handmatige codering van uitspraken.
+
+#### De cijfers van rechtspraak.nl
+
+Ook rechtspraak.nl heeft een [aparte themapagina](https://www.rechtspraak.nl/Themas/Wraking) gewijd aan wraking. En in het [jaarverslag](https://jaarverslagrechtspraak.nl/wp-content/uploads/sites/2/2021/04/Jaarverslag-Rechtspraak-2020.pdf#page=66) van de rechtspraak komt de wrakingsprocedure ook terug. 
+
+In de [kengetallen 2019](https://www.rechtspraak.nl/SiteCollectionDocuments/kengetallen-2019.pdf) van rechtspraak.nl staan overigens de cijfers van ingediende wrakingsverzoeken bij de rechtbanken:
+
+```{r}
+kengetallen <- data.frame (Jaar  = c("2016", "2017", "2018", "2019"),
+                  AantalVerzoeken = c(516,480,563,559),
+                  RechtspraakGehonoreerd = c(17,10,15,16), 
+                  Dataset = c(381, 339,426,373),
+                  DatasetDeelsToegewezen = c(16,11,17,13)
+                  )
+kengetallen
+```
+
+De uitspraken-dataset van rechtspraak.nl lijkt een andere te zijn dan waar de kengetallen van de rechtspraak op zijn gebaseerd. Dat zou betekenen dat niet alle wrakingsprocedures worden gepubliceerd. We kunnen dus concluderen dat veel wrakingsuitspraken niet worden gepubliceerd. Dat ligt niet aan een vertraging van publicatie van wrakingsuitspraken: Gemiddeld duurt het ongeveer 60 dagen voordat een wrakingszaak wordt gepubliceerd. 
+
+#### Iteratief onderzoek
+
+Het onderzoek dat ik heb uitgevoerd is iteratief: Na enkele experimentele queries en korte data-analyses heb ik gekozen voor het onderwerp wraking, de (voorlopige) dataset bepaald, diverse uitspraken bestudeerd, trefwoorden genoteerd en classificaties bedacht. Hoe meer uitspraken je bekijkt, hoe meer (tekst)patronen opvallen. Daar heb ik vervolgens mijn onderzoek weer op aangepast. Gewoon beginnen is het devies, het onderzoek gedurende de rit aanpassen, en weer doorgaan met de nieuwe inzichten.
+
+Dit document is opgesteld met R-markdown: hier is de broncode beschikbaar waarmee in RStudio data kunnen worden opgevraagd en bewerkt.
+
+#### Dataset
+
+De door mij gehanteerde dataset is, zoals gezegd, afkomstig van de totale uitspraken-dataset van rechtspraak.nl. Deze totale dataset wordt maandelijks bijgewerkt en aangevuld. Enkele jaren geleden heb ik de dataset gedownload en periodiek een update doorgevoerd waarbij ik rekening heb gehouden met wijzigingen als de wijzigingsdata in de door rechtspraak.nl meegeleverde metadata daartoe aanleiding gaven. 
+
+De dataset van rechtspraak.nl behelst ca. 600.000 uitspraken en deze uitspraken zijn voorzien van metadata, zoals een uniek ecli-nummer, de uitspraakdatum, een inhoudsindicatie en nog veel meer. Voor de eerste selectie heb ik als criterium gehanteerd dat de tekenreeks "wraking" voorkomt in de inhoudsindicatie en/of de uitspraak zelf, waarbij geen onderscheid wordt gemaakt tussen hoofdletters en kleine letters, en ook de omringende tekens niet relevant zijn (als in de inhoudsomschrijving slechts het woord "wrakingsprocedure" voorkomt, dan wordt ook die uitspraak geselecteerd).
+
+Het tijdvak dat ik heb gehanteerd betreft de vijf jaren 2016 tot en met 2020. Tuchtrechtuitspraken heb ik niet geselecteerd, omdat deze niet vallen onder het publicatieprotocol van rechtspraak.nl. Ook conclusies van de procureur-generaal in wrakingszaken heb ik buiten de dataset gelaten. Als variabelen heb ik uitsluitend het ecli-nummer, de inhoudsindicatie en de uitspraaktekst opgevraagd. 
+
+```{r Dataset_Inladen_Eerste_keer, echo=FALSE, include=FALSE, size="small"}
+library(dplyr)
+library(tm)
+library(stringr)
+Dataset <- readRDS(file = "D:\\Uitwisselmap\\Projecten\\Ecli\\Rstudio\\WrakingAlles.rds") %>% 
+  select(-uitkomst, -reden)
+```
+
+Met de selectie op basis van deze criteria resteert een dataset van `r length(Dataset$ecli)` uitspraken. Enkele uitspraken zijn niet interessant, omdat die geen tekst bevatten. De uitspraakteksten in de dataset van rechtspraak.nl wordt aangeleverd inclusief html-codes, dat zijn kort gezegd de layout-codes van een uitspraak. Die codes staan doorgaans tussen vishaken ("<" en ">") en zijn dus ook gemakkelijk te verwijderen. 
+Die heb ik uit de dataset verwijderd. Om een idee te krijgen van de dataset gaat hierbij een voorbeeld (de tekstvelden zijn afgebroken i.v.m. de lengte):
+
+```{r echo=FALSE, size="tiny"}
+head(Dataset, 5)
+```
+
+De lijst met eclinummers is hier te downloaden als tekstbestand.
+
+#### Foutmarge
+Bij rechtspraakanalyse is een foutmarge onvermijdelijk. Fouten ontstaan bij de invoer door rechtspraak.nl, bij het aanleveren/ontvangen van de database van rechtspraak.nl, bij het verwerken ervan in een eigen database, bij de selectie van subsets, bij het onderzoek en bij het interpreteren van het onderzoek. De foutmarge kan problematisch zijn waar je hem niet ziet: ontbrekende data en ontbrekende resultaten. Maar zeker met machinelearning-algoritmen heb je nu eenmaal te maken met foutmarges. Dat is geen probleem als die foutmarges binnen acceptabele grenzen blijven en daar ligt dan ook de focus bij het ontwikkelen van deze algoritmen. 
+
+Voor wat betreft dit onderzoek bestaat de mogelijkheid dat er in de dataset, ondanks het publicatieprotocol, uitspraken ontbreken over wrakingsprocedures. Dat maakt de database dan niet meer volledig, maar nog wel representatief. Of en hoeveel uitspraken ontbreken, valt niet goed in te schatten. Ook is mogelijk dat er wrakingsprocedures zijn geweest waarin de tekenreeks "wraking" niet in de uitspraak staat vermeld. De kans hierop is zeer klein, zo zullen wij hierna zien. Overigens worden nog maandelijks wrakingsuitspraken gepubliceerd door rechtspraak.nl, dus dat er enige uitspraken ontbreken in de dataset is niet onwaarschijnlijk. Het gaat echter om te lage aantallen om significante invloed te hebben op de uitkomsten van het onderzoek. Dat maakt de door mij gestelde foutmarges (tot twee cijfers achter de komma) heel betrekkelijk. 
+
+Wat de door mij gestelde foutmarges ook betrekkelijk maakt, is het feit dat algoritmen hun berekeningen vaak baseren op zeer veel willekeurig gekozen selecties van data. De ene selectie is de andere niet en de ene uitkomst zal de andere daarom niet zijn. De kunst is om de foutmarge bij algoritmen zoveel mogelijk te beperken, maar een zekere variatie is hier onvermijdelijk.

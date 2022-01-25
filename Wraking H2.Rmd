@@ -1,0 +1,198 @@
+---
+title: "Wrakingsprocedures"
+author: "Raimond Dufour"
+date: "12-01-2021"
+output:
+  word_document: default
+  html_document:
+    code_folding: show
+subtitle: Hoofdstuk 2
+editor_options:
+  markdown:
+    wrap: 72
+---
+```{r setup, include = FALSE, echo = FALSE}
+library(dplyr)
+library(tm)
+library(stringr)
+library(ggplot2)
+library(caret)
+library(doSNOW)
+library(beepr)
+library(randomForest)
+knitr::opts_chunk$set(
+  error=TRUE, 
+  echo = FALSE, 
+  fig.align = 'center', 
+  out.width = '90%', 
+  warning = TRUE, 
+  message= TRUE, 
+  size = 'small', 
+  comment = ""
+)
+```
+
+```{r include = FALSE, echo = FALSE}
+rm(list = ls())
+regexTellen <- function(datakolom, regex){
+  return (ifelse(grepl(regex, datakolom, ignore.case = TRUE) == F, 0, lengths(gregexpr(regex, datakolom, ignore.case = TRUE))) )
+}
+VarToevoegen <- function(Dataset, Woordenlijst, TeGebruikenTekst) {
+    for(i in 1:nrow(Woordenlijst)) {
+    Kolomnaam <- Woordenlijst[[i,1]]
+    print(Kolomnaam)
+    Dataset[[Kolomnaam]] <- regexTellen(Dataset$uitspraak, Woordenlijst[[i, 1]])
+    }
+    names(Dataset) <- make.names(names(Dataset))
+    return(Dataset)
+}
+Dataset <- readRDS(file = "D:\\Uitwisselmap\\Projecten\\Ecli\\Rstudio\\WrakingAlles.rds") %>% 
+    select(-uitkomst, -reden)
+```
+
+## 2. Wrakingsprocedure of niet?
+
+Van de `r length(Dataset$ecli)` gevonden uitspraken zal bepaald moeten worden of het hier daadwerkelijk gaat om een wrakingsprocedure. De tekenreeks "wraking" kan immers ook in een ander verband voorkomen. Er zijn verschillende methoden om te bepalen of het hier gaat om een wrakingsprocedure of niet. Ik bespreek de volgende:
+
+a.  Handmatige selectie;
+b.  Selectie op basis van reguliere expressies;
+c.  Selectie op basis van een machine-learning algoritme.
+
+#### A. Handmatige selectie
+
+Met handmatige selectie kan op misschien wel de minst-foutloze wijze worden vastgesteld of sprake is van een wrakingsprocedure of niet. Het nadeel van deze methode is vanzelfsprekend de arbeidsintensiviteit. Het kost veel tijd, moeite en concentratie om de selectie handmatig te maken. Maar ook bij handmatige selectie zijn hulpmiddelen te gebruiken die het werk sneller en gemakkelijker maken.
+
+*Gerechtelijke grammatica*:
+De meeste uitspraken hebben een uniforme opbouw: 
+
+1. De aanhef (partijnamen, advocaten/gemachtigden, e.d.); 
+2. De expositie, d.w.z. de passages in de uitspraak die het procesverloop beschrijven, de geschilpunten, de rechtsvraag, etc.; 
+3. De overwegingen, waarin de rechter aan het woord is, oordeelt over de feiten en over het recht, en middels motiveringen komt tot zijn 
+4. Beslissing, ofwel het dictum. 
+5. De meeste uitspraken eindigen met de legalisatie, waarin verantwoord is van wanneer de uitspraak (in het openbaar) is uitgesproken en welke rechters (en griffier) de uitspraak hebben
+gewezen.; 
+6. Sommige uitspraken bevatten nog één of meerdere bijlagen.
+
+Deze verschillende onderdelen noem ik gerechtelijke grammatica. Het is in de meeste gevallen mogelijk door middel van regexen te bepalen welke passages tot welke onderdelen behoort. Per uitspraak kan dan een kolom voor elk onderdeel van de uitspraak worden gemaakt. Het is vervolgens eenvoudig om van alle wrakingsuitspraken alleen de beslissing op te vragen.
+
+*QDA-software*: 
+Er zijn verschillende qda-programma's waarmee uitspraken "gecodeerd" kunnen worden, dat wil zeggen op een slimme manier van labels kunnen worden voorzien en gecategoriseerd kunnen worden. Voor korte teksten heb ik in excel een eenvoudig [qda-programma](bvo.dds.nl/QDA.xlsm) gebouwd waarmee snel maar doeltreffend teksten kunnen worden gecategoriseerd . Met de beslissing van elke uitspraak kan snel worden bepaald of het hier gaat om een wrakingsprocedure en zo ja, wat de uitkomst daarvan is.
+
+De uitkomst van het handmatige onderzoek naar de vraag welke uitspraken een wrakingsprocedure betreft is [hier](github.com/) te vinden. In het navolgende zal ik de handmatige uitkomsten gebruiken als *benchmark* voor de overige twee methoden, waar ik niet elke uitspraak zelf heb bestudeerd, maar dit heb overgelaten aan de computer.
+
+De dataset ziet er na de handmatige codering als volgt uit:
+
+```{r Dataset_inladen_Tweede_keer}
+summary(Dataset)
+```
+#### B. Selectie op basis van reguliere expressies;
+Het gebruik van *regular expressions* (ook wel regex genoemd) betreft het zoeken op tekstpatronen, en dus niet slechts op een specifieke tekenreeks. Er bestaat een min of meer uniforme syntaxis van voor verschillende programmeertalen. Het is zeg maar een meer geavanceerde manier van zoeken met wildcards (zoals \*) . De regex "verzoek(st\|)er" geeft uitspraken die zowel verzoeker als verzoekster bevatten.
+
+Het is mogelijk om een lijst te maken van reguliere expressies en per uitspraak die regexen te tellen. Het gaat dan om woorden of tekstpatronen die veel voorkomen in wrakingsprocedures en niet of veel minder in andere soorten procedures. Voor de hand ligt om woorden/tekstpatronen te gebruiken die ook in de wetteksten met betrekking tot wraking worden gehanteerd, maar dat hoeft niet per se. Als hulpmiddel om je woorden te kiezen kun je ook een lijst van meest gebruikte woorden generen (zie hier voor deze dataset), en daaruit de meest onderscheidende woorden selecteren. Hoe meer woorden je selecteert, hoe beter je resultaten zullen zijn.
+
+Het is belangrijk om te onderkennen dat regex-methode al snel een foutmarge impliceert. Het is de kunst die foutmarge te verkleinen door meerdere en "betere" regexen te gebruiken. Het vergt wat oefening en creativiteit maar is ook weer niet enorm moeilijk. Het aardige is: hoe meer uitspraken je bekijkt, hoe beter je kunt inschatten welke woorden relevant zijn voor het onderscheid. Een ander nadeel is dat spelfouten niet of verkeerd worden gesignaleerd. Ondanks deze bezwaren kan het gebruik van regexen zeer dienstbaar zijn voor het *pre-processen* van data, zoals wij hierna zullen zien.
+
+```{r RegexenToevoegen, include=FALSE}
+woordenlijstWrakingOfNiet <- as_tibble(c("wraking", "wrakingskamer", "wrakingsverzoek", "partijdig", "rechter", "verzoek(st|)er"))
+
+Dataset2 <- VarToevoegen(Dataset, woordenlijstWrakingOfNiet, uitspraak)
+Dataset2$totaal <- Dataset2$wraking + Dataset2$wrakingskamer + Dataset2$wrakingsverzoek + Dataset2$partijdig + Dataset2$rechter + Dataset2$verzoek.st..er
+Dataset2$test <- ifelse(Dataset2$totaal > 28, "wrakingszaak", "geen wrakingszaak")
+Dataset2$test <- as.factor(Dataset2$test)
+```
+
+Hoe meer regexen in de uitspraak voorkomen, hoe groter de kans is dat het gaat om een wrakingsprocedure en op deze manier kan ook de uitkomst van een wrakingsprocedure worden "ingeschat". Ik heb zes regexen gebruikt: "wraking", "wrakingskamer", "wrakingsverzoek", "partijdig", "rechter" en "verzoek(st\|)er". Ik realiseer mij daarbij dat er een
+overlap bestaat van de eerste regex met de tweede resp derde regex, want de tekenreeks "wraking" komt ook voor in de tweede en derde tekenreeks. 
+
+Als laatste kolom heb ik de scores van de zes regexen bij elkaar opgeteld.
+
+De eenvoudigste methode om de uitkomst te bepalen is als volgt. De frequentie per regex is een score die je ook ten opzichte van elkaar kunt wegen. Hoe hoger de overall-score, des te hoger de kans dat het een wrakingsprocedure betreft. Steeksproefsgewijs zou je uitspraken kunnen bekijken en onderzoeken bij welke score het omslagpunt voor de kans of de uitspraak een wrakingsprocedure betreft of niet.
+
+Voor de tekenreeks "wraking" is het verschil in incidentie binnen de dataset als volgt weer te geven:
+
+```{r boxplotWraking, echo=FALSE , fig.width=6, fig.height=4, fig.align='center'}
+ggplot(Dataset2, aes(x=wrakingszaak, y=wraking, fill=wrakingszaak)) + 
+  geom_boxplot() + 
+  theme_classic()+
+  theme(axis.text.x = element_text()) +
+  ylab('"wraking"') +
+  theme_minimal() +
+  scale_fill_brewer(palette="Set1")
+```
+
+Uit de handmatig gecodeerde set volgt dat ongeveer 20% van de uitspraken waar de tekenreeks "wraking" in voorkomt niet een wrakingsprocedure betreft. Als we voor elke regex en de totaalscore de hoogste 80% score een punt geven en vervolgens per uitspraak de punten optellen, dan krijgen we een totaalscore met een maximum van 7. Als we er vanuit gaan dat dat ook geldt voor de andere regexen, dan krijgen de uitspraken met een score van 4 de kwalificatie "wrakingsprocedure". Deze werkwijze is overigens betrekkelijk eenvoudig te *tunen*, met betere resultaten tot gevolg. 
+
+De resultaten van deze werkwijze zijn af te zetten tegen de resultaten uit het handmatige onderzoek in een *confusion matrix*: De rijen geven de voorspellingen weer, de kolommen de referentiewaarde (handmatige codering):
+
+```{r confMatrix, echo=FALSE }
+cf <- confusionMatrix(Dataset2$wrakingszaak, Dataset2$test)
+cf$table
+```
+
+Uit deze confusion matrix blijkt een foutmarge van `r 100-round(cf$overall[1], digits = 4)*100`%.
+
+#### C. Selectie op basis van een machine-learning algoritme.
+
+De derde methode is op basis van een door de computer te ontwikkelen algoritme. Een algoritme leert op basis van bekende uitkomsten. We zullen dus een dataset moeten creëren waarin de uitkomsten bekend zijn (de trainingset), op die dataset het algoritme bouwen en dat algoritme toepassen op de overige uitspraken (de testset). We pakken willekeurig 70% van de dataset die wij handmatig hebben bekeken en maken daarvan een testset, maar zien er wel op toe dat de verhouding in uitkomsten gelijk blijft. De data waarop wij (in eerste instantie) gaan trainen bestaat uit de frequenties van de regexen zoals wij die in de vorige paragraaf hebben geteld. Waar wij handmatig de frequenties van de verschillende regexen optelden, laten wij nu de computer kijken naar andere dan lineaire verbanden tussen de regexen onderling. De computer ziet, kort gezegd, verbanden tussen variabelen die mensen niet kunnen zien.
+
+```{r TrainingTestingset, include=FALSE}
+Dataset3 <- Dataset2 %>% 
+  select(-inhoudsindicatie, -uitspraak, -test)
+
+set.seed(123)
+indexes <- createDataPartition(Dataset3$wrakingszaak, times = 1, p = 0.7, list = FALSE)
+train <- Dataset3[indexes,]
+test <- Dataset3[-indexes,]
+```
+
+We hebben de dataset van de regexen en kennen de uitkomsten van het handmatige onderzoek. Die dataset is verdeeld in een trainingset (70%) en een testset (30%). Elke uitspraak met variabelen kan als een beslisboom leiden tot de uitkomst (wrakingszaak of niet). De computer selecteert willekeurig ruim honderdduizend maal enkele variabelen uit de trainingset en checkt de uitkomst (de random forest-methode). Zo worden de variabelen in meerdere dimensies met elkaar vergeleken en afgezet tegen de bekende uitkomst. Dit vereist rekenkracht: Mijn computer is hier met zes cores (zeg maar chips in de computer) ongeveer een minuut mee bezig geweest.
+
+```{r AlgoritmeBouwen, include=FALSE, cache=TRUE}
+train <- na.omit(train)
+train.eclis <- as.data.frame(train$ecli)
+test.wrakingszaak <-as.data.frame(test$wrakingszaak) 
+train$ecli <- NULL
+test$wrakingszaak <- NULL
+
+set.seed(234)
+cv.folds <- createMultiFolds(train$wrakingszaak, k = 10, times = 3)
+cv.cntrl <- trainControl(method = "repeatedcv", number = 10,
+                         repeats = 3, index = cv.folds)
+Sys.time()
+start.time <- Sys.time()
+cl <- makeCluster(6, type = "SOCK")
+registerDoSNOW(cl)
+rf.cv.Voorspelling <- train(wrakingszaak ~ ., data = train, method = "rf", 
+                            trControl = cv.cntrl, tuneLength = 7)
+stopCluster(cl)
+Sys.time() - start.time
+rm(start.time)
+beep()
+```
+
+De beslisbomen (het algoritme) die zijn gegenereerd met behulp van de trainingset worden vervolgens toegepast op de testset. Het is belangrijk om te weten dat de testset dus niet betrokken is geweest bij het genereren van het algoritme, zodat de computer de testset uitsluitend benadert met de "kennis" van de trainingset.
+
+Het algoritme toont een sterke verbetering ten opzichte van de Regex-methode:
+
+```{r MLConfusionMatrix, echo=FALSE}
+# rf.cv.Voorspelling
+preds.test <- predict(rf.cv.Voorspelling, test)
+a <- confusionMatrix(preds.test, test.wrakingszaak$`test$wrakingszaak`)
+a$table
+# round(a$overall[1], digits = 4)*100
+
+```
+
+De *accuracy* is hier `r round(a$overall[1], digits = 4)`, oftewel `r 100-round(a$overall[1], digits = 4)*100`% is foutief vastgesteld. 
+
+Welke regexen zijn nu het belangrijkst bij het algoritme? De computer maakt dat heel mooi inzichtelijk:
+
+```{r VarImpPlot, echo=FALSE, fig.width=6, fig.height=4, fig.align='center'}
+varImpPlot(rf.cv.Voorspelling$finalModel, main="Belangrijkste variabelen")
+```
+
+De meeste bepalende regex zijn "verzoek(st\|)er" en "wraking".
+
+Dit resultaat kan nog worden verbeterd. Er zijn vele machine learningmethodes die allemaal kunnen worden *getuned*. Voor de hier gebruikte random forest-methode zou je bijvoorbeeld het aantal beslisbomen per uitspraak kunnen aanpassen, of het aantal berekeningen dat de computer uitvoert. Maar wij zouden ook meer regexen kunnen gebruiken, of andere variabelen toevoegen. Bijvoorbeeld de instantie, of de wraking speelt in een civiele, bestuursrechtelijke of strafrechtelijk procedure. Het moeten niet per sé juridische variabelen zijn, maar het is wel belangrijk om variabelen te gebruiken die enig begrijpelijk causaal verband kunnen hebben met de uitkomst, om toevallige correlatie te voorkomen.
+
+

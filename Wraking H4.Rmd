@@ -1,0 +1,501 @@
+---
+title: "Wraking H4"
+author: "Raimond Dufour"
+date: "12-1-2022"
+output:
+  word_document: default
+  html_document: default
+---
+```{r setup, echo = FALSE, include=FALSE}
+knitr::opts_chunk$set(
+  error=TRUE, 
+  echo = FALSE, 
+  fig.align = 'center', 
+  out.width = '90%', 
+  warning = TRUE, 
+  message= TRUE, 
+  size = 'tiny', 
+  comment = ""
+)
+library(dplyr)
+library(tm)
+library(stringr)
+library(ggplot2)
+library(caret)
+library(tidytext)
+library(tidymodels)
+library(textrecipes)
+library(doSNOW)
+library(beepr)
+library(randomForest)
+library(quanteda)
+library(quanteda.textstats)
+library(magrittr)
+substrRight <- function(x, n){
+  substr(x, nchar(x)-n+1, nchar(x))
+}
+regexTellen <- function(datakolom, regex){
+  return (ifelse(grepl(regex, datakolom, ignore.case = TRUE) == F, 0, lengths(gregexpr(regex, datakolom, ignore.case = TRUE))) )
+}
+VarToevoegen <- function(Dataset, Woordenlijst, TeGebruikenTekst) {
+    for(i in 1:nrow(Woordenlijst)) {
+    Kolomnaam <- Woordenlijst[[i,1]]
+    print(Kolomnaam)
+    Dataset[[Kolomnaam]] <- regexTellen(Dataset$uitspraak, Woordenlijst[[i, 1]])
+    }
+    names(Dataset) <- make.names(names(Dataset))
+    return(Dataset)
+}
+```
+
+## 4. Wrakingsredenen
+Na bestudering van een aantal uitspraken kwam ik tot de constatering dat er grofweg 3 redenen zijn om een rechter te wraken: 
+
+1.	De **hoedanigheid** van de rechter; Bijvoorbeeld: Heeft de rechter een eigen (financieel) belang in deze zaak? Of is hij in privé gelieerd aan een betrokken partij? 
+2.	Een onwelgevallige **beslissing**; Veel wrakingsverzoeken zien op een (doorgaans: procedurele) beslissing waaruit de vrees voor partijdigheid/vooringenomenheid wordt gesteld. 
+3.	De bejegening door de rechter. Het **optreden** van een rechter (meestal ter zitting) kan aanleiding geven om de rechter te wraken.
+
+Het verschil tussen deze drie redenen is overigens niet in alle gevallen heel duidelijk. En het komt regelmatig voor dat meerdere redenen voor de wraking worden opgegeven. Ook komt het voor dat de redenen van de verzoeker te onduidelijk zijn om te behandelen of dat de redenen niet duidelijk worden geformuleerd in de uitspraak. De handmatige codering van deze variabele is tijdsintensief en zeker niet foutloos. Toch valt er heel goed een analyse te maken. 
+
+```{r echo=FALSE}
+# Klaar zetten van data en functies:
+# rm(list = ls())
+
+Dataset <- readRDS(file = "D:\\Uitwisselmap\\Projecten\\Ecli\\Rstudio\\Wrakingszaken.rds") %>% 
+  mutate(uitkomst = as.character(uitkomst)) %>% 
+  mutate(uitkomst= as.factor(ifelse(uitkomst == 'hybride', 'niet-ontvankelijk', uitkomst))) 
+
+
+  # upSample(Dataset$reden) %>% 
+```
+
+Welke woorden zijn kenmerkend voor de verschillende redenen? Dat is niet zo moeilijk te bepalen: we maken een lijst van alle woorden in de uitspraken en kijken welke woorden het meest voorkomen. Vervolgens maken we een subset van de uitspraken per reden en kijken weer naar de woordfrequentie. Het verschil tussen de twee lijsten geeft de meest onderscheidende woorden per reden. Van die woorden kiezen wij de woorden die een te verwachten relatie met de reden hebben. Ik kom dan op de volgende woorden en combinaties:
+
+```{r include=FALSE}
+# Woordgewicht per categorie bepalen:
+stopwoorden <- stopwords('nl') %>% 
+  as_tibble() %>% 
+  set_colnames("word")
+
+Reden <- function(df, redenVar, MinAantal) {
+    reeden <- df %>% 
+      filter(reden == redenVar)
+
+    WoordfrequentieReden <- reeden %>%
+      group_by(word) %>%
+      summarize(WFReden = sum(n))
+
+    Reeden <- reeden %>%
+      left_join(WoordfrequentieReden, by = "word") %>%
+      group_by(word) %>%
+      summarize(WFTotaal = mean(WoordfreqTotaal)) %>%
+      left_join(WoordfrequentieReden, by = "word") %>%
+      mutate(Ratio = WFReden / WFTotaal) %>%
+      mutate(reden = redenVar) %>%
+      filter(WFReden > MinAantal) %>%
+      arrange(desc(Ratio))
+
+    return (Reeden)
+}
+library(tidytext)
+Woorden <- Dataset %>% 
+  # upSample(Dataset$reden) %>% 
+  # unnest_tokens(output=word, input = uitspraak) %>% 
+  unnest_ngrams(word, input = inhoudsindicatie, n_min = 1, n=3) %>% 
+  anti_join(stopwoorden, copy = TRUE) %>% 
+  filter(str_detect(word, "[[:alpha:]]")) %>% 
+  filter(grepl("[[:digit:]]", word)==F) %>% 
+  filter(grepl("[[:punct:]]", word)==F) 
+
+Woordfrequenties <- Woorden %>% 
+  count(ecli, reden, word, sort = TRUE) 
+
+WoordfrequentieTotaal <- Woordfrequenties %>% 
+  group_by(word) %>% 
+  summarize(WoordfreqTotaal = sum(n))
+
+wf <- as_tibble(Woordfrequenties) %>% 
+  left_join(WoordfrequentieTotaal, by = "word")
+
+reden <- wf %>% 
+  filter(reden=='beslissing')
+hoedanigheid <- Reden(wf, "hoedanigheid", 40)
+optreden <- Reden(wf, "optreden", 50)
+beslissing <- Reden(wf, "beslissing", 50)
+
+```
+
+* Hoedanigheid: "eerder betrokken", "andere procedure", "betrokken", "nevenfunctie", "lid van", "werkzaam"
+* Optreden: "opmerking", "proces( |-)verbaal", "kritisch", " woord", "bejegen", "vra(a|)g", "comparitie", "zitting", "behandeling", "wederhoor"
+* Beslissing: "beslissing", "getuige", "aanhouding|uitstel", "horen", "motivering", "procedurele|processuele"
+
+```{r VoorbereidenVoorAI, include=FALSE}
+# Resultaat van het woordgewicht (let op causaliteit: handmatig de per categorie meest voorkomende woord(combinaties) als regex vermelden:)
+# rm(list = ls())
+
+Hoedanigheid <- as.data.frame(c("eerder betrokken", "andere procedure", "betrokken is", "nevenfunctie", "lid van", "werkzaam"))
+Optreden <- as.data.frame(c("opmerking", "proces( |-)verbaal", "kritisch", " woord", "bejegen", "vra(a|)g", "comparitie", "zitting", "behandeling",
+                            "wederhoor"))
+Beslissing <- as.data.frame(c("beslissing", "getuige", "aanhouding|uitstel", "horen", "motivering", "procedurele|processuele", "onbegrijpelijk"))
+  
+Dataset  <- Dataset %>% 
+  mutate(Hoedanigheid = as.factor(ifelse(grepl("hoedanigheid", reden, fixed = TRUE)==T, "hoedanigheid", "geen hoedanigheid"))) %>%
+  mutate(Optreden = as.factor(ifelse(grepl("optreden", reden, fixed = TRUE)==T, "optreden", "geen optreden"))) %>% 
+  mutate(Beslissing = as.factor(ifelse(grepl("beslissing", reden, fixed = TRUE)==T, "beslissing", "geen beslissing"))) 
+
+
+regexTellen <- function(datakolom, regex){
+  return (ifelse(grepl(regex, datakolom, ignore.case = TRUE) == F, 0, lengths(gregexpr(regex, datakolom, ignore.case = TRUE))) )
+}
+VarToevoegen <- function(Dataset, Woordenlijst) {
+    for(i in 1:nrow(Woordenlijst)) {
+    Kolomnaam <- Woordenlijst[[i,1]]
+    print(Kolomnaam)
+    Dataset[[Kolomnaam]] <- regexTellen(Dataset$uitspraak, Woordenlijst[[i, 1]])
+    }
+  return(Dataset)
+}
+
+ds <- Dataset %>% 
+  VarToevoegen(Hoedanigheid) %>% 
+  VarToevoegen(Optreden) %>% 
+  VarToevoegen(Beslissing) %>% 
+  select(-inhoudsindicatie, -uitspraak)
+names(ds) <- make.names(names(ds))
+saveRDS(ds, file = "ds.rds")
+
+# Reden bepalen voor algoritme:
+dsHoedanigheid <- ds %>% 
+  mutate(reden = Hoedanigheid) %>% 
+  select(-Hoedanigheid, -Optreden, -Beslissing) 
+saveRDS(dsHoedanigheid, file = "dsHoedanigheid.rds")
+dsOptreden <- ds %>% 
+  mutate(reden = Optreden) %>% 
+  select(-Hoedanigheid, -Optreden, -Beslissing) 
+saveRDS(dsOptreden, file = "dsOptreden.rds")
+dsBeslissing <- ds %>% 
+  mutate(reden = Beslissing) %>% 
+  select(-Hoedanigheid, -Optreden, -Beslissing) 
+saveRDS(dsBeslissing, file = "dsBeslissing.rds")
+
+summary(dsHoedanigheid) 
+dsHoedanigheid <- dsHoedanigheid%>% 
+  mutate(uitkomst=as.factor(uitkomst))
+
+# ggplot(filter(dsHoedanigheid, nevenfunctie>0), aes(x=nevenfunctie, fill=reden)) + 
+#   geom_boxplot(alpha=0.6) +
+#   theme(legend.position="bottom")
+
+
+# a <- ggplot(filter(dsBeslissing, nevenfunctie>0), aes(x=nevenfunctie, fill=reden)) + 
+#   geom_bar(alpha=0.6) +
+#   theme_minimal()+
+#   theme(
+#     legend.position = c(.85, .95),
+#     legend.justification = c("right", "top"),
+#     legend.box.just = "right",
+#     # legend.margin = margin(6, 6, 6, 6)
+#     )  +
+#   scale_fill_brewer(palette="Set1")
+# b <- ggplot(filter(dsBeslissing, andere.procedure>0), aes(x=andere.procedure, fill=reden)) + 
+#   geom_bar(alpha=0.6, show.legend = FALSE) +
+#   scale_fill_brewer(palette="Set1")
+# c <- ggplot(filter(dsBeslissing, eerder.betrokken>0), aes(x=eerder.betrokken, fill=reden)) + 
+#   geom_bar(alpha=0.6, show.legend = FALSE) +
+#   scale_fill_brewer(palette="Set1") 
+# d <- ggplot(filter(dsBeslissing, werkzaam>0), aes(x=werkzaam, fill=reden)) + 
+#   geom_bar(alpha=0.6, show.legend = FALSE)  +
+#   scale_fill_brewer(palette="Set1")
+# 
+# library(ggpubr)
+# ggarrange(a, b, c, d, nrow = 2)
+# (a) + (b)
+# ggplot(filter(ds, nevenfunctie>0), aes(x=nevenfunctie, fill=reden)) + 
+#   geom_bar(alpha=1) +
+#   theme_minimal()+
+#   theme(
+#     legend.position = c(.85, .95),
+#     legend.justification = c("right", "top"),
+#     legend.box.just = "right",
+#     # legend.margin = margin(6, 6, 6, 6)
+#     ) +
+#   scale_fill_brewer(palette="Set1")
+# 
+
+```
+
+### Bag of words
+Als wij per ecli elk woord van de inhoudsindicatie in een aparte kolom tellen, dan krijgen wij een *bag of words*. Elk nieuw woord in de volgende inhoudsindicatie voegt weer een kolom toe. Uiteindelijk krijg je dan een tabel met per rij de inhoudsindicatie en per kolom alle woorden die in alle inhoudsindicaties stonden. In de cel staat het aantal keer dat het woord in die inhoudsindicatie is gevonden. 
+
+Het is duidelijk dat een beetje "corpus" leidt tot een hele grote tabel: 
+
+```{r dfm1, include=FALSE}
+corp = corpus(Dataset, text_field = 'uitspraak')
+tokens1 = tokens(corp)
+dtm1 = dfm(tokens1)
+```
+
+Dit is maar een kleine selectie uit de tabel, in werkelijkheid heeft deze tabel `r dim(dtm1)[1]` rijen (de uitspraken), en maar liefst `r dim(dtm1)[2]` kolommen. In totaal dus `r length(dtm1)` cellen. En de meeste cellen, bijna 99% zijn leeg omdat er niet veel overlap is in de gehele woordenverzameling. Er zijn evenwel mogelijkheden om die omvang wat te beperken. We zijn immers alleen op zoek naar betekenisvolle woorden. Om te beginnen kunnen alle letters omgezet worden in kleine letters en stopwoorden zoals "de" en "van" uit de teksten worden gehaald. Ook woorden(tekenreeksen) met een cijfer of vreemd teken worden uit de selectie gehaald. Bovendien worden woorden die in totaal minder dan 3 keer voorkomen ook geschrapt uit de lijst.
+
+De computer ziet natuurlijk geen onderscheid tussen vervoegingen van werkwoorden, meervouden van zelfstandig naamwoorden etcetera. Maar taalkundigen hebben een algoritme gebouwd waarmee van woorden de stam kan worden berekend, zodat alle vervoegingen daaruit gefilterd worden. De stam is dan vaak geen bestaand woord, maar je kunt vaak wel begrijpen wat het oorspronkelijke woord was. 
+
+Met bovengenoemde aanpassing wordt de zin: 
+```{r ZinTonen, echo=FALSE}
+zin <- "Op de rechte stukken moest Verstappen het gas loslaten om op deze banden nog de finish te kunnen halen."
+zin
+```
+
+omgezet in:
+```{r FunctieOpschonen, echo=FALSE}
+# Tussendoortje1:
+Opschonen <- function(tekst){
+  tekst <- tolower(tekst)
+  tekst <- gsub("\\d", " ", tekst)
+  tekst <- removePunctuation(tekst)
+  stopwords_regex = paste(stopwords('nl'), collapse = '\\b|\\b')
+  stopwords_regex = paste0('\\b', stopwords_regex, '\\b')
+  tekst <- str_replace_all(tekst, stopwords_regex, '')  
+  tekst <- stemDocument(tekst, language="dutch")
+  return(tekst)
+}
+Opschonen(zin)
+```
+
+Niet echt een goed leesbare tekst, maar wel enigszins begrijpelijk en voor de computer heel goed te hanteren. En het voordeel is: de computer telt nu de woorden met dezelfde stam bij elkaar op, zonder de verbuigingen, meervouden e.d. over te slaan.  
+
+```{r dfm2, include=FALSE, echo=FALSE, cache=TRUE}
+# Tussendoortje2:
+# corp = corpus(Dataset, text_field = 'uitspraak')
+Dataset$uitspraakSchoon <- Opschonen(Dataset$uitspraak)
+corp2 <- corpus(Dataset, text_field = 'uitspraakSchoon')
+tokens2 <- tokens(corp2)
+dtm2 <-  dfm(tokens2)
+
+length(dtm1)
+length(dtm2)
+
+dtm1T = dfm_trim(dtm1, min_termfreq = 3)
+dtm2T  = dfm_trim(dtm2, min_termfreq = 3)
+length(dtm1T)
+length(dtm2T)
+# tstat_freqAllesVerkort <- textstat_frequency(dtm2, n = 20)
+# head(tstat_freqAllesVerkort[,c(1:2,4)], n=20)
+
+```
+
+
+```{r TFIDF, include=FALSE, echo=FALSE, cache=TRUE}
+# Tussendoortje3:
+Woorden <- Dataset %>% 
+  unnest_tokens(output=word, input = uitspraakSchoon) %>% 
+  group_by(ecli, word) %>%
+  tally() %>% 
+  arrange(desc(n))
+
+Woorden <- Woorden %>% 
+  bind_tf_idf(word, ecli, n) %>% 
+  select(-tf, -idf) %>% 
+  arrange((tf_idf))
+
+```
+
+De tabel die de computer op deze manier oplevert is een tabel van `r ncol(dtm2)` kolommen en `r nrow(dtm2)` rijen. Alle woordfrequenties in deze tabel gaan we vervolgens wegen: We zetten de woorden af tegen het totaal aantal woorden in de betreffende uitspraak en eveneens tegen het totaal aantal keren dat het woord in alle documenten voorkomt. Daar komt per woord een score uit van 0 tot ca. 5, met veel cijfers achter de komma. Een hogere score betekent dat het woord vaker voorkomt in relatief weinig uitspraken. Een lage score betekent dat het woord weinig voorkomt in veel uitspraken. 
+
+De computer kan prima rekenen met deze getallen. Door te kijken naar de verschillen in woordgewicht per categorie reden kan de computer daar verbanden herkennen. 
+
+```{r, echo=FALSE, eval=FALSE}
+Dataset <- readRDS(file = "D:\\Uitwisselmap\\Projecten\\Ecli\\Rstudio\\Wraking\\Dataset.rds") 
+dsHoedanigheid <- readRDS(file = "D:\\Uitwisselmap\\Projecten\\Ecli\\Rstudio\\Wraking\\dsHoedanigheid.rds") 
+uitspraken <- Dataset %>% 
+  select(ecli, uitspraak)
+
+dsHoedanigheid <- dsHoedanigheid %>% 
+  left_join(uitspraken, by = "ecli") %>% 
+  select(-uitkomst)
+  # mutate(uitkomst = as.factor(uitkomst))
+
+set.seed(123)
+Data_split <- initial_split(dsHoedanigheid, strata = reden)  
+train_data <- training(Data_split) %>% droplevels()
+test_data <- testing(Data_split) %>% droplevels()
+library(themis)
+recept <- 
+  recipe(reden ~ ., data = train_data) %>% #voorbereiding voor algoritme
+  update_role(ecli, uitspraak, new_role="ID") %>%
+  step_dummy(all_nominal(), -reden) %>% # Dummy-vars: alle factor-kolommen uitbreiden met een kolom / variabele
+  step_normalize(all_numeric()) #%>% # alle numerieke velden binnen een eigen schaal zetten (je kan ook "scale" gebruiken) 
+  # themis::step_upsample(reden) #%>% #%>%  # upsamplen, bij een niet-normale verdeling van de data
+   prep()
+
+recept
+
+  # step_novel(tekst, new_level = "new") %>% # Geen idee wat dit doet... new_level = "new",
+  step_tokenize(uitspraak, engine = "tokenizers.bpe") %>%
+  step_stopwords(uitspraak, language="nl") %>%
+  step_stem(uitspraak) %>%
+  # step_ngram(tekst, num_tokens = 2, min_num_tokens = 1)%>%
+  step_tokenfilter(uitspraak, max_tokens = tune(), min_times = 5) %>%
+  step_tfidf(uitspraak) %>%
+  step_pca(all_numeric(), -all_outcomes(), num_comp = 6) %>%
+  # step_pca(cyl, disp, hp, threshold = tune())
+  step_zv(all_numeric())  %>%#alle numerieke kolommen die geen variantie hebben verwijderen
+  step_corr(all_numeric()) %>%  #correlerende kolommen uitsluiten?
+  step_impute_mean(all_numeric())  %>% # missende waarden opvullen met het gemiddelde
+  step_naomit(all_nominal()) %>% # alle velden met een missende waarde verwijderen 
+  step_select(-uitspraak)# %>% 
+  # step_clean_levels() # %>% # %>% Kolomnamen corrigeren waar ze niet goed
+  # step_smote(reden) %>% 
+  prep()
+
+multi_spec <- multinom_reg(penalty = tune(), mixture = 1) %>%
+  set_mode("classification") %>%
+  set_engine("glmnet")
+  
+lasso_spec <- logistic_reg(penalty = tune(), mixture = 1) %>%
+  set_mode("classification") %>%
+  set_engine("glmnet")
+
+glm_spec <- logistic_reg(penalty = tune(), mixture = 1) %>% 
+  set_mode("classification") %>%
+  set_engine("glm")
+param_grid <- grid_regular(
+  penalty(range = c(-4, 0))
+  # mtry(range = c(1,5)),
+  ) 
+
+rf_spec <- rand_forest(trees = 1000) %>%
+  set_mode("classification") %>%
+  set_engine("ranger")
+# grid voor rf_spec(meen ik):
+param_grid <- grid_regular(
+  penalty(range = c(-4, 0)),
+   max_tokens(range= c(10,50)),
+  levels = 6, 
+  grid=5
+  )
+
+rf_fit <- rand_forest(mtry = tune()) %>% 
+    set_engine("randomForest", importance = TRUE) %>% 
+    set_mode("classification")
+# grid voor rf_fit:
+param_grid <- grid_regular(
+  mtry(range = c(1,5)),
+  levels = 5) # Dit moet niet meer zijn dan het aantal variabelen 
+
+lm_model <- linear_reg() %>% 
+  set_engine("lm") %>% 
+  set_mode("regression")
+
+
+wf <- workflow() %>%
+  add_recipe(recept) %>%
+  add_model(rf_fit) 
+
+folds <- vfold_cv(train_data, v = 10, strat = reden)
+
+set.seed(234)
+doParallel::registerDoParallel(cores=6)
+resultaat <- tune_grid(
+  wf, 
+  resamples=folds, 
+  grid=param_grid, 
+  control = control_grid(save_pred = TRUE, verbose = TRUE))
+doParallel::stopImplicitCluster()
+
+resultaat$.notes
+resultaat <- glmnet_resultaat
+collect_metrics(resultaat)
+show_best(resultaat, "roc_auc")
+best_roc_auc <- select_best(resultaat, "roc_auc")
+# conf_mat_resampled(resultaat, best_roc_auc)
+# collect_predictions(resultaat)
+autoplot(resultaat)
+
+a <- collect_predictions(resultaat)
+confusionMatrix(a$reden, a$.pred_class)
+
+wf_spec_final <- finalize_workflow(wf, best_roc_auc)
+
+# FINAL FIT: de test-data toepassen!
+final_fit <- last_fit(
+  wf_spec_final,
+  Data_split
+)
+
+
+
+```
+
+
+
+
+```{r include=FALSE}
+# # Algoritme preprocessing: 
+# # Kies uit:
+# # dsAlgoritme <- dsHoedanigheid
+# # dsAlgoritme <- dsOptreden
+# dsAlgoritme <- dsBeslissing
+# 
+# set.seed(345)
+# indexes <- createDataPartition(dsAlgoritme$reden, times = 1, p = 0.7, list = FALSE)
+# train <- dsAlgoritme[indexes,]
+# test <- dsAlgoritme[-indexes,]
+# train <- na.omit(train)
+# test <- na.omit(test)
+# 
+# train.eclis <- as.data.frame(train$ecli)
+# test.reden <- as_tibble(test$reden) %>% 
+#   rename(reden = value)
+# train$ecli <- NULL
+# test$reden <- NULL
+# 
+# saveRDS(test, file = "test.Beslissing.rds")
+# saveRDS(test.reden, file = "test.reden.Beslissing.rds")
+# 
+# set.seed(567)
+# cv.folds <- createMultiFolds(train$reden, k = 10, times = 3)
+# cv.cntrl <- trainControl(method = "repeatedcv", number = 10,
+#                          repeats = 3, index = cv.folds)
+```
+
+
+```{r include=FALSE}
+# # Algoritme bouwen:
+# Sys.time()
+# start.time <- Sys.time()
+# cl <- makeCluster(6, type = "SOCK")
+# registerDoSNOW(cl)
+# rf.cv.dsBeslissing <- train(reden ~ ., data = train, method = "rf", 
+#                             trControl = cv.cntrl, tuneLength = 7)
+# stopCluster(cl)
+# tijd <- Sys.time() - start.time
+# tijd
+# rm(start.time)
+# beep()
+# saveRDS(rf.cv.dsBeslissing, file = "rf.cv.dsBeslissing.rds")
+```
+
+```{r fig.height=5, include=FALSE}
+# # Algoritme bekijken: 
+# Hoedanigheid:
+# preds.test.Hoedanigheid <- predict(rf.cv.dsHoedanigheid, test)
+# confusionMatrix(preds.test.Hoedanigheid, test.reden$reden)
+# varImpPlot(rf.cv.dsHoedanigheid$finalModel, main="Belangrijkste variabelen")
+
+# # Optreden:
+# preds.test.Optreden <- predict(rf.cv.dsOptreden, test)
+# confusionMatrix(preds.test.Optreden, test.reden$reden)
+# varImpPlot(rf.cv.dsOptreden$finalModel, main="Belangrijkste variabelen")
+
+# # Beslissing:
+# preds.test.Beslissing <- predict(rf.cv.dsBeslissing, test)
+# confusionMatrix(preds.test.Beslissing, test.reden$reden)
+# varImpPlot(rf.cv.dsBeslissing$finalModel, main="Belangrijkste variabelen")
+
+```
+
+Omdat in een uitspraak meerdere redenen kunnen worden vermeld, heb ik per reden een algoritme gebouwd om de woorden te herkennen. De accuratesse van deze drie algoritmen komen ver in de 90%:
+
+* Algoritme Hoedanigheid: 99,59%
+* Algoritme Optreden: 96,45%
+* Algoritme Beslissing: 93,67%

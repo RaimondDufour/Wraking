@@ -1,0 +1,185 @@
+---
+title: "Wraking H3"
+author: "Raimond Dufour"
+date: "12-1-2022"
+output:
+  word_document: default
+  html_document: default
+---
+```{r setup, echo = FALSE, include=FALSE, tidy=TRUE}
+knitr::opts_chunk$set(
+  error=TRUE, 
+  echo = FALSE, 
+  fig.align = 'center', 
+  out.width = '90%', 
+  warning = TRUE, 
+  message= TRUE, 
+  size = 'tiny', 
+  comment = ""
+)
+library(dplyr)
+library(tm)
+library(stringr)
+library(ggplot2)
+library(caret)
+library(doSNOW)
+library(beepr)
+library(randomForest)
+library(quanteda)
+library(quanteda.textstats)
+
+rm(list = ls())
+
+substrRight <- function(x, n){
+  substr(x, nchar(x)-n+1, nchar(x))
+}
+regexTellen <- function(datakolom, regex){
+  return (ifelse(grepl(regex, datakolom, ignore.case = TRUE) == F, 0, lengths(gregexpr(regex, datakolom, ignore.case = TRUE))) )
+}
+VarToevoegen <- function(Dataset, Woordenlijst, TeGebruikenTekst) {
+    for(i in 1:nrow(Woordenlijst)) {
+    Kolomnaam <- Woordenlijst[[i,1]]
+    print(Kolomnaam)
+    Dataset[[Kolomnaam]] <- regexTellen(Dataset$uitspraak, Woordenlijst[[i, 1]])
+    }
+    names(Dataset) <- make.names(names(Dataset))
+    return(Dataset)
+}
+Dataset <- readRDS(file = "D:\\Uitwisselmap\\Projecten\\Ecli\\Rstudio\\Wrakingszaken.rds") %>% 
+  mutate(uitkomst = as.character(uitkomst)) %>% 
+  mutate(uitkomst= as.factor(ifelse(uitkomst == 'hybride', 'niet-ontvankelijk', uitkomst))) %>% 
+  select(-reden)
+
+```
+
+## 3. Uitkomst van de wraking
+
+Op dezelfde wijze gaan we kijken naar de uitkomst van de wraking. We gebruiken de uitspraken waarvan we handmatig hebben vastgesteld dat het gaat om een wrakingsprocedure. In onze dataset zijn dat `r length(Dataset$ecli)` uitspraken. Handmatig heb ik vastgesteld dat er  80 zaken (al dan niet deels) zijn toegewezen, 1428 zaken zijn afgewezen en 666 zaken niet-ontvankelijk zijn verklaard. Bovendien zijn er 109 zaken waar de rechter de wraking deels niet-ontvankelijk heeft verklaard en deels heeft afgewezen, bij de handmatige codering heb ik geconstateerd dat het veelal gaat om een niet-ontvankelijkverklaring, waarbij de rechtbank "voor het overige" de wraking afwijst. Die heb ik daarom bij die categorie gevoegd. Tot slot zijn er 9 wrakingsuitspraken waar geen wrakingsbeslissing is genomen, maar bijvoorbeeld een uitstel is gelast. In mijn onderzoek ben ik uitgegaan van drie categorieën:
+
+* afwijzing, 
+* (gedeeltelijke) toewijzing en 
+* niet-ontvankelijk. 
+
+De uitspraken waar de rechtbank zowel niet-ontvankelijkheid aanneemt en voor het overige afwijst, heb ik geschaard onder de rubriek "niet-ontvankelijk". Als wij weer gaan regexen, dan kijken we naar de meest voorkomende woorden in de uitspraken:
+
+```{r FrequenteWoorden, echo=FALSE, warning=FALSE}
+corp = corpus(Dataset, text_field = 'uitspraak')
+tokens = tokens(corp)
+dtm2 = dfm(tokens, tolower=T, remove = stopwords('nl'), remove_punct=T)
+dtm  = dfm_trim(dtm2, min_termfreq = 2)
+tstat_freqAllesVerkort <- textstat_frequency(dtm2, n = 20)
+head(tstat_freqAllesVerkort[,c(1:2,4)], n=20)
+
+```
+
+Deze woorden zijn weinig onderscheidend waar het gaat om de uitkomst van de procedure. Bijkomend probleem is dat de uitkomsten niet evenwichtig zijn verdeeld: slechts 3,5% van de uitspraken leiden tot een toewijzing. Wat zou een goede benadering kunnen zijn?
+
+```{r uitkomsten, echo=FALSE}
+Dataset <- Dataset %>% 
+  mutate(uitkomst = as.character(uitkomst)) %>% 
+  mutate(uitkomst= as.factor(ifelse(uitkomst == 'hybride', 'niet-ontvankelijk', uitkomst)))
+
+```
+
+De database van rechtspraak.nl bevat zoals gezegd niet alleen de uitspraaktekst, maar ook metadata. Bij veel uitspraken is een inhoudsindicatie gegeven: een korte omschrijving van de zaak. Die inhoudsindicatie zie je ook als je een uitspraak zoekt op de website van rechtspraak.nl. Vaak wordt in die beschrijving al aangegeven wat de uitkomst is. Maar soms ontbreekt de inhoudsindicatie of is die te kort om daar informatie uit te krijgen. Dan biedt het dictum van de uitspraak uitkomst: het dictum bevat de beslissing van de rechter. Het dictum staat aan het eind van de uitspraaktekst en bevat doorgaans niet meer dan 500 tekens. Dus als wij in die gevallen de te doorzoeken tekst kleiner maken door de laatste 500 tekens van de uitspraak te nemen dan zoeken wij in een meer specifieke "corpus". De meest voorkomende worden geven zo al een betere indicatie over de uitkomst van de procedure:
+```{r uitkomstBepalenPreprocess, include=FALSE, cache=TRUE}
+Dataset$TeGebruikenTekst <- substrRight(Dataset$uitspraak, 500)
+# Met inhoudsindicatie:
+Dataset$TeGebruikenTekst <- ifelse(nchar(Dataset$inhoudsindicatie) > 15, Dataset$inhoudsindicatie, Dataset$TeGebruikenTekst)
+Dataset$TeGebruikenTekst <- stripWhitespace(Dataset$TeGebruikenTekst)
+```
+
+
+```{r FrequenteWoorden2, echo=FALSE, warning=FALSE}
+corp = corpus(Dataset, text_field = 'TeGebruikenTekst')
+tokens = tokens(corp)
+dtm2 = dfm(tokens, tolower=T, remove = stopwords('nl'), remove_punct=T)
+dtm  = dfm_trim(dtm2, min_termfreq = 2)
+tstat_freqAllesVerkort <- textstat_frequency(dtm2, n = 20)
+head(tstat_freqAllesVerkort[,c(1:2,4)], n=20)
+
+```
+```{r echo=FALSE, include=FALSE}
+woordenlijstUitkomst <- as_tibble(c("wraking af", "(afwij(z|s)|ongegrond)", "wraking toe", "hof", "behandeling", "(niet( |-)ontv|buiten behand)",
+                                    "wijst toe",  "toegewezen", "afgewezen","toewij(s|z)", "toe deze", "wijst af", 
+                                    "(verzoek tot wraking|wrakingsverzoek) af", "(verzoek tot wraking|wrakingsverzoek) toe", "(oneigenlijk|misbruik)",
+                                    "verkla", " toe", " af"))
+
+Dataset <- Dataset %>% 
+  VarToevoegen(woordenlijstUitkomst, TeGebruikenTekst) %>% 
+  mutate(lengteInhoudsind = nchar(Dataset$inhoudsindicatie)) %>% 
+  mutate(lengteUitspraak = nchar(Dataset$uitspraak)) %>% 
+  select(-inhoudsindicatie, -uitspraak, -TeGebruikenTekst) %>% 
+  mutate(uitkomst=as.factor(uitkomst))
+
+```
+
+```{r uitkomstBepalenAlgoritme, include=FALSE, cache=TRUE}
+set.seed(234)
+indexes <- createDataPartition(Dataset$uitkomst, times = 1, p = 0.7, list = FALSE)
+train <- Dataset[indexes,]
+train <- upSample(train, train$uitkomst)
+train$Class <- NULL
+test <- Dataset[-indexes,]
+train <- na.omit(train)
+test <- na.omit(test)
+
+train.eclis <- as.data.frame(train$ecli)
+test.uitkomst <-as.data.frame(test$uitkomst) 
+train$ecli <- NULL
+test$uitkomst <- NULL
+
+set.seed(567)
+cv.folds <- createMultiFolds(train$uitkomst, k = 10, times = 3)
+cv.cntrl <- trainControl(method = "repeatedcv", number = 10,
+                         repeats = 3, index = cv.folds)
+
+Sys.time()
+start.time <- Sys.time()
+cl <- makeCluster(6, type = "SOCK")
+registerDoSNOW(cl)
+rf.cv.VoorspellingUitkomst <- train(uitkomst ~ ., data = train, method = "rf", 
+                            trControl = cv.cntrl, tuneLength = 7)
+stopCluster(cl)
+tijd <- Sys.time() - start.time
+tijd
+rm(start.time)
+beep()
+```
+
+Het probleem van de verdeling is op een slimme manier op te lossen: we kopieren de uitspraken die in de minderheid zijn zodanig, dat de uitkomsten in aantal min of meer gelijk zijn (*upsample*). We zouden ook de uitspraken die in de meerderheid kunnen verwijderen totdat de uitkomst-verhoudingen gelijk zijn (downsample), maar dan gooi je in dit geval wel erg veel data weg. We regexen de belangrijke woorden op inhoudsindicatie en uitspraak en bouwen daarmee een algoritme. Mijn computer doet daar ongeveer `r round(tijd, digits = 0)` minuten over. De uitkomsten zijn als volgt: 
+
+```{r fig.width=6, fig.height=5, fig.align='center', echo=FALSE}
+preds.test <- predict(rf.cv.VoorspellingUitkomst, test)
+# length(preds.test)
+a <- confusionMatrix(preds.test, test.uitkomst$`test$uitkomst`)
+a$table
+```
+
+Hier zien we een foutmarge van `r 100-round(a$overall[1], digits = 4)*100`%. De belangrijkste variabelen zijn: 
+
+```{r fig.width=6, fig.height=5, fig.align='center', echo=FALSE}
+varImpPlot(rf.cv.VoorspellingUitkomst$finalModel, main="Belangrijkste variabelen")
+```
+
+Wat opvalt is dat de lengte van de uitspraak als belangrijke variabele wordt aangemerkt voor het bepalen wat de uitkomst van de uitspraak is. Hebben wij hier te maken met causaliteit? Je zou denken: zonder causaliteit geen voorspellende waarde. Dit is een steeds terugkerende vraag: zijn de gebruikte variabelen geschikt om als voorspeller te fungeren? 
+
+```{r fig.align='center', echo=FALSE, warning = FALSE}
+
+filter(Dataset, Dataset$uitkomst != 'hybride' & Dataset$uitkomst!='geen wrakingsbeslissing') %>% 
+  ggplot(aes(x=uitkomst, y=lengteUitspraak, fill=uitkomst)) + 
+  geom_boxplot(varwidth = TRUE, show.legend = FALSE) + 
+  # theme_classic()+
+  theme(axis.text.x = element_text()) +
+  ylab('uitspraaklengte (in aantal tekens)') +
+  theme_minimal() +
+  scale_fill_brewer(palette="Set1")
+```
+
+De lengte van een toewijzende uitspraak is gemiddeld langer dan een afwijzende uitspraak of een niet-ontvankelijkverklaring. Dat valt te verklaren doordat ook een wrakingsrechter weet dat een wraking zeldzamer is en, gelet op de gevolgen, geneigd zal zijn om meer uitleg te geven. Bovendien toetst de rechter doorgaans eerst of het wrakingsverzoek ontvankelijk is. Als het verzoek niet ontvankelijk is, kan inhoudelijke bespreking achterwege blijven, met een kortere uitspraak tot gevolg. Hetzelfde zal gelden voor de lengte van de inhoudsindicatie. 
+
+Wie op zoek is naar een nog beter resultaat, die kan de computer vragen om de uitkomst van de testset te specificeren naar waarschijnlijkheid van de uitkomst. Je krijgt dan per uitspraak vier kolommen: afgewezen, toegewezen, niet-ontvankelijk en geen beslissing. Zo kun je zien bij welke uitspraken de computer meer twijfelde. Die zou je dan weer handmatig kunnen nagaan. Maar ook hier weer: het is goed om te weten dat het hier gaat om schattingen, het algoritme is niet foutloos. Een uitspraak die (volgens de computer) duidelijk een afgewezen wrakingszaak betreft, hoeft dat niet per sé te zijn. Het gaat om (de wet van) de grote getallen. 
+
+
+
+
