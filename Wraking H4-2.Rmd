@@ -1,0 +1,178 @@
+---
+title: "Wraking H4-2"
+author: "Raimond Dufour"
+date: "26-1-2022"
+output:
+  word_document: default
+  html_document: default
+---
+```{r setup, echo = FALSE, include=FALSE}
+knitr::opts_chunk$set(
+  error=TRUE, 
+  echo = FALSE, 
+  fig.align = 'center', 
+  out.width = '90%', 
+  warning = TRUE, 
+  message= TRUE, 
+  size = 'tiny', 
+  comment = ""
+)
+library(dplyr)
+library(tm)
+library(stringr)
+library(ggplot2)
+library(caret)
+library(tidytext)
+library(tidymodels)
+library(textrecipes)
+library(textdata)
+library(doSNOW)
+library(beepr)
+library(randomForest)
+library(quanteda)
+library(quanteda.textstats)
+library(magrittr)
+library(themis)
+library(parsnip)
+
+```
+
+```{r, dataPreprocessing}
+rm(list = ls())
+
+Dataset <- readRDS(file = "D:\\Uitwisselmap\\Projecten\\Ecli\\Rstudio\\Wraking\\Wrakingszaken.rds")
+multivariabelen <- readRDS(file = "D:\\Uitwisselmap\\Projecten\\Ecli\\Rstudio\\Wraking\\Multivariabelen.rds") 
+# saveRDS(dsHoedanigheid, file = "D:\\Uitwisselmap\\Projecten\\Ecli\\Rstudio\\Wraking\\dsHoedanigheid.rds")
+dsHoedanigheid <- readRDS(file = "D:\\Uitwisselmap\\Projecten\\Ecli\\Rstudio\\Wraking\\dsHoedanigheid.rds") 
+dsOptreden <- readRDS(file = "D:\\Uitwisselmap\\Projecten\\Ecli\\Rstudio\\Wraking\\dsOptreden.rds") 
+dsBeslissing <- readRDS(file = "D:\\Uitwisselmap\\Projecten\\Ecli\\Rstudio\\Wraking\\dsBeslissing.rds") 
+
+uitspraken <- Dataset %>% 
+  select(ecli, uitspraak)
+
+multivarbewerkt <- multivariabelen %>% 
+  select(ecli, lengteUitspraak, instantie, rechtsgebied, trust, anger, anticipation, fear, sadness, aantalwoorden, feiten, recht, totaal) %>% 
+  mutate(feitentotaal = feiten/totaal) %>%
+  mutate(rechttotaal = recht/totaal) %>%
+  select(-feiten, -recht, -totaal) 
+
+teGebruiken <- dsHoedanigheid
+
+dsReden <- teGebruiken %>% 
+  left_join(uitspraken, by = "ecli") %>%
+  select(-uitkomst) %>% 
+  left_join(multivarbewerkt, by = "ecli") %>%
+  # mutate(uitspraak = as.factor(uitspraak)) %>%
+  filter(!is.na(uitspraak)) 
+```
+
+```{r SplitEnRecept}
+set.seed(123)
+Data_split <- initial_split(dsReden, strata = reden)  
+train_data <- training(Data_split) %>% droplevels()
+test_data <- testing(Data_split) %>% droplevels()
+
+recept <- 
+  recipe(reden ~ ., data = train_data) %>% #voorbereiding voor algoritme
+  update_role(ecli, uitspraak, new_role="ID") %>%
+  step_tokenize(uitspraak) %>%
+  step_stem(uitspraak) %>%
+  step_stopwords(uitspraak) %>%
+  step_tokenfilter(uitspraak, max_tokens = 500) %>%
+  step_tfidf(uitspraak) %>%
+  # step_word_embeddings(uitspraak, embeddings = embedding_glove27b()) %>%
+  step_dummy(instantie, rechtsgebied) %>% # Dummy-vars: alle factor-kolommen uitbreiden met een kolom / variabele
+  step_impute_mean(all_numeric()) %>%  
+  step_normalize(all_numeric()) %>% # alle numerieke velden binnen een eigen schaal zetten (je kan ook "scale" gebruiken) 
+  themis::step_upsample(reden) %>% # upsamplen, bij een niet-normale verdeling van de data
+  step_zv(all_numeric()) #%>% #alle numerieke kolommen die geen variantie hebben verwijderen
+  # step_naomit(uitspraak) %>% 
+  prep()
+  r <- juice(recept) #%>% 
+
+```
+
+```{r ModelsEnFit}
+set.seed(234)
+boot <- bootstraps(train_data)
+
+glm_spec <- 
+  logistic_reg() %>% 
+  set_engine("glm")
+
+rf_spec <- rand_forest(trees = 1000) %>%
+  set_mode("classification") %>%
+  set_engine("ranger")
+
+glmworkflow <- 
+  workflow() %>% 
+  add_model(glm_spec) %>% 
+  add_recipe(recept)
+
+rfworkflow <- 
+  workflow() %>% 
+  add_model(rf_spec) %>% 
+  add_recipe(recept)
+
+glm_fit <- glmworkflow %>% 
+    fit_resamples(
+      resamples = boot, 
+      control=control_resamples(save_pred = TRUE, verbose = TRUE))
+
+rf_fit <- rfworkflow %>% 
+  fit_resamples(
+    resamples = boot, 
+    control=control_resamples(save_pred = TRUE, verbose = TRUE))
+
+```
+
+```{r MetricsEnPredictions}
+collect_metrics(glm_fit)
+collect_metrics(rf_fit)
+
+glm_finaal <- glmworkflow %>% 
+  last_fit(Data_split)
+
+rf_finaal <- rfworkflow %>% 
+  last_fit(Data_split)
+
+collect_metrics(glm_finaal)
+collect_metrics(rf_finaal)
+
+glm <- collect_predictions(glm_finaal) 
+glmCM <- confusionMatrix(glm$reden, glm$.pred_class)
+glmCM$table
+glmCM$overall
+rf <- collect_predictions(rf_finaal)
+rfCM <- confusionMatrix(rf$reden, rf$.pred_class)
+rfCM$table
+rfCM$overall
+
+```
+De uitkomsten van blijken het beste te zijn in het random-forest model: 
+> rfCM$table
+                 Reference
+Prediction        beslissing geen beslissing
+  beslissing             133              56
+  geen beslissing         24             370
+
+
+> rfCM$table
+               Reference
+Prediction      geen optreden optreden
+  geen optreden           459        8
+  optreden                 63       53
+
+Maar bij de hoedanigheid gebeurt er iets geks:  
+> rfCM$table
+                   Reference
+Prediction          geen hoedanigheid hoedanigheid
+  geen hoedanigheid               545            0
+  hoedanigheid                     38            0
+  
+Dus daar maar het glm-model gebruikt: 
+> glmCM$table
+                   Reference
+Prediction          geen hoedanigheid hoedanigheid
+  geen hoedanigheid               490           55
+  hoedanigheid                     17           21
